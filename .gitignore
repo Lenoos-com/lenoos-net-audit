@@ -1,0 +1,38 @@
+# ── Python virtual environment ──
+.venv/
+__pycache__/
+*.pyc
+
+# ── Exports & reports ──
+exports/
+*.pdf
+!README.pdf
+
+# ── Audit output files ──
+audit_*.html
+audit_*.json
+report.json
+lenoos-audit-*
+lenoos-stream-*
+
+# ── Temp files ──
+*.tmp
+*.bak
+*.swp
+*~
+
+# ── OS files ──
+.DS_Store
+Thumbs.db
+
+# ── IDE / Editor ──
+.vscode/
+.idea/
+*.code-workspace
+
+# ── Docker ──
+docker-compose.override.yml
+
+# ── Ollama models (large binaries) ──
+models/
+*.gguf

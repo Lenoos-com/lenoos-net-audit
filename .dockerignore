@@ -1,0 +1,39 @@
+# ── Git ──
+.git/
+.gitignore
+
+# ── Python virtual environment ──
+.venv/
+__pycache__/
+
+# ── Documentation (not needed in image) ──
+README.md
+README.pdf
+CHANGES.md
+
+# ── Exports & audit output ──
+exports/
+audit_*.html
+audit_*.json
+report.json
+lenoos-audit-*
+lenoos-stream-*
+
+# ── IDE / Editor ──
+.vscode/
+.idea/
+*.code-workspace
+
+# ── OS files ──
+.DS_Store
+Thumbs.db
+
+# ── Temp / backup ──
+*.tmp
+*.bak
+*.swp
+*~
+
+# ── Ollama models (pulled at runtime) ──
+models/
+*.gguf
