@@ -17,3 +17,5 @@ jobs:
     # This workflow only verifies that the Docker image builds successfully and does not push it to any registry.
     - name: Build the Docker image
       run: docker build . --file Dockerfile --tag lenoos-net-audit:$(date +%s) --tag lenoos-net-audit:latest
+    - name: Test the Docker image
+      run: docker run --rm lenoos-net-audit:latest --help
