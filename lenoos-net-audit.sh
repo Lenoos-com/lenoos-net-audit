@@ -99,63 +99,63 @@ declare -A RES_BF_GRADE RES_BF_SCORE RES_DDOS_GRADE RES_DDOS_SCORE
 
 # ====================== PDF.CONF BRANDING ======================
 # Defaults (overridden by pdf.conf if present)
-PDF_LOGO=\"\"           # path to logo image (png/svg)
-PDF_BRAND=\"Lenoos Net Audit\"
-PDF_AUTHOR=\"\"
-PDF_FILENAME=\"\"       # custom filename template
-PDF_WEBSITE=\"\"
-PDF_EMAIL=\"\"
-PDF_PHONE=\"\"
-PDF_CONTACT_PERSON=\"\"
-PDF_TEST_ENV=\"\"       # e.g. \"Production / Staging / Lab\"
-PDF_LAB_DETAILS=\"\"
-PDF_REF_BASE_URL=\"\"   # base URL for QR code generation
+PDF_LOGO=""             # path to logo image (png/svg)
+PDF_BRAND="Lenoos Net Audit"
+PDF_AUTHOR=""
+PDF_FILENAME=""         # custom filename template
+PDF_WEBSITE=""
+PDF_EMAIL=""
+PDF_PHONE=""
+PDF_CONTACT_PERSON=""
+PDF_TEST_ENV=""         # e.g. "Production / Staging / Lab"
+PDF_LAB_DETAILS=""
+PDF_REF_BASE_URL=""     # base URL for QR code generation
 
 _load_pdf_conf() {
-    local conf=\"\"
+    local conf=""
     # Search order: ./pdf.conf, script dir/pdf.conf, ~/.config/lenoos/pdf.conf
     local _script_dir
-    _script_dir=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"
-    for _p in \"./pdf.conf\" \"${_script_dir}/pdf.conf\" \"${HOME}/.config/lenoos/pdf.conf\"; do
-        if [[ -f \"$_p\" ]]; then
-            conf=\"$_p\"
+    _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    for _p in "./pdf.conf" "${_script_dir}/pdf.conf" "${HOME}/.config/lenoos/pdf.conf"; do
+        if [[ -f "$_p" ]]; then
+            conf="$_p"
             break
         fi
     done
-    [[ -z \"$conf\" ]] && return 0
-    echo -e \"  ${CYAN}[PDF] Loading branding from: ${BOLD}${conf}${NC}\"
+    [[ -z "$conf" ]] && return 0
+    echo -e "  ${CYAN}[PDF] Loading branding from: ${BOLD}${conf}${NC}"
     while IFS='=' read -r key val; do
-        key=\"$(echo \"$key\" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')\"
-        val=\"$(echo \"$val\" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^\"//;s/\"$//')\"
-        [[ -z \"$key\" || \"$key\" == \\#* ]] && continue
-        case \"$key\" in
-            logo)            PDF_LOGO=\"$val\" ;;
-            brand_name)      PDF_BRAND=\"$val\" ;;
-            author)          PDF_AUTHOR=\"$val\" ;;
-            filename)        PDF_FILENAME=\"$val\" ;;
-            website)         PDF_WEBSITE=\"$val\" ;;
-            email)           PDF_EMAIL=\"$val\" ;;
-            phone)           PDF_PHONE=\"$val\" ;;
-            contact_person)  PDF_CONTACT_PERSON=\"$val\" ;;
-            test_environment) PDF_TEST_ENV=\"$val\" ;;
-            lab_details)     PDF_LAB_DETAILS=\"$val\" ;;
-            ref_base_url)    PDF_REF_BASE_URL=\"$val\" ;;
+        key="$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        val="$(echo "$val" | sed "s/^[[:space:]]*//;s/[[:space:]]*$//;s/^\"//;s/\"$//")"
+        [[ -z "$key" || "$key" == \#* ]] && continue
+        case "$key" in
+            PDF_LOGO|logo)             PDF_LOGO="$val" ;;
+            PDF_BRAND|brand_name)      PDF_BRAND="$val" ;;
+            PDF_AUTHOR|author)         PDF_AUTHOR="$val" ;;
+            PDF_FILENAME|filename)     PDF_FILENAME="$val" ;;
+            PDF_WEBSITE|website)       PDF_WEBSITE="$val" ;;
+            PDF_EMAIL|email)           PDF_EMAIL="$val" ;;
+            PDF_PHONE|phone)           PDF_PHONE="$val" ;;
+            PDF_CONTACT_PERSON|contact_person)  PDF_CONTACT_PERSON="$val" ;;
+            PDF_TEST_ENV|test_environment)      PDF_TEST_ENV="$val" ;;
+            PDF_LAB_DETAILS|lab_details)        PDF_LAB_DETAILS="$val" ;;
+            PDF_REF_BASE_URL|ref_base_url)      PDF_REF_BASE_URL="$val" ;;
         esac
-    done < \"$conf\"
+    done < "$conf"
 }
 
-# Generate QR code as inline SVG (no external dependency; uses a simple API or local generation)
+# Generate QR code as inline SVG or img tag
 _generate_qr_svg() {
-    local data=\"$1\"
-    local size=\"${2:-150}\"
-    # Try local qrencode first, fallback to inline placeholder
+    local data="$1"
+    local size="${2:-150}"
+    # Try local qrencode first
     if command -v qrencode &>/dev/null; then
-        qrencode -t SVG -o - -s 4 -m 2 \"$data\" 2>/dev/null && return 0
+        qrencode -t SVG -o - -s 4 -m 2 "$data" 2>/dev/null && return 0
     fi
-    # Fallback: use Google Charts API URL in an img tag
+    # Fallback: use qrserver.com API in an img tag
     local encoded
-    encoded=\"$(echo -n \"$data\" | sed 's/ /%20/g;s/&/%26/g;s/?/%3F/g;s/=/%3D/g;s/#/%23/g')\"
-    echo \"<img src=\\\"https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encoded}\\\" width=\\\"${size}\\\" height=\\\"${size}\\\" alt=\\\"QR Code\\\" style=\\\"display:block;margin:10px auto;\\\" />\"
+    encoded="$(echo -n "$data" | sed 's/ /%20/g;s/&/%26/g;s/?/%3F/g;s/=/%3D/g;s/#/%23/g')"
+    echo "<img src=\"https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encoded}\" width=\"${size}\" height=\"${size}\" alt=\"QR Code\" style=\"display:block;margin:10px auto;\" />"
 }
 
 # ====================== USAGE ======================
