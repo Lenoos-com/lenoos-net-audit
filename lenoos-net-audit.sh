@@ -100,6 +100,7 @@ declare -A RES_BF_GRADE RES_BF_SCORE RES_DDOS_GRADE RES_DDOS_SCORE
 # ====================== PDF.CONF BRANDING ======================
 # Defaults (overridden by pdf.conf if present)
 PDF_LOGO=""             # path to logo image (png/svg)
+PDF_LOGO_SIZE=64         # logo height in px on cover page (default 64)
 PDF_BRAND="Lenoos Net Audit"
 PDF_AUTHOR=""
 PDF_FILENAME=""         # custom filename template
@@ -110,6 +111,7 @@ PDF_CONTACT_PERSON=""
 PDF_TEST_ENV=""         # e.g. "Production / Staging / Lab"
 PDF_LAB_DETAILS=""
 PDF_REF_BASE_URL=""     # base URL for QR code generation
+PDF_UUID=""             # report UUID (auto-generated if empty; or set via -R)
 
 _load_pdf_conf() {
     local conf=""
@@ -140,8 +142,23 @@ _load_pdf_conf() {
             PDF_TEST_ENV|test_environment)      PDF_TEST_ENV="$val" ;;
             PDF_LAB_DETAILS|lab_details)        PDF_LAB_DETAILS="$val" ;;
             PDF_REF_BASE_URL|ref_base_url)      PDF_REF_BASE_URL="$val" ;;
+            PDF_LOGO_SIZE|logo_size)            PDF_LOGO_SIZE="$val" ;;
+            PDF_UUID|uuid)                      PDF_UUID="$val" ;;
         esac
     done < "$conf"
+}
+
+# Generate a UUID v4
+_generate_uuid() {
+    if [[ -f /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid
+    elif command -v uuidgen &>/dev/null; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+    else
+        printf '%04x%04x-%04x-4%03x-%04x-%04x%04x%04x\n' \
+            $((RANDOM)) $((RANDOM)) $((RANDOM)) $((RANDOM & 0x0fff)) \
+            $((RANDOM & 0x3fff | 0x8000)) $((RANDOM)) $((RANDOM)) $((RANDOM))
+    fi
 }
 
 # Generate QR code as inline SVG or img tag
@@ -170,6 +187,7 @@ show_usage() {
     echo -e "    ${CYAN}-i${NC} Identity   ${CYAN}-j${NC} Install   ${CYAN}-4${NC} IPv4   ${CYAN}-6${NC} IPv6   ${CYAN}-u${NC} UDP"
     echo -e "    ${CYAN}-b${NC} Bypass     ${CYAN}-s${NC} SNI       ${CYAN}-e${NC} [json|csv|html|xml|yaml|pdf]"
     echo -e "    ${CYAN}-n${NC} ${BOLD}<path>${NC}  Custom export path/filename  (use with -e)"
+    echo -e "    ${CYAN}-R${NC} ${BOLD}<uuid>${NC}  Set report UUID (auto-generated if omitted)"
     echo -e "    ${CYAN}-o${NC} ${BOLD}<fmt>${NC}  Stream output  [json|yaml|html|xml|text] (pipe-friendly)"
     echo -e "    ${CYAN}-E${NC} ${BOLD}<port>${NC}  Prometheus metrics exporter (default 9101, serves /metrics)"
     echo -e "    ${CYAN}-w${NC} ${BOLD}<sec>${NC}   Watch mode — re-run audit every N seconds (use with -E)"
@@ -6351,8 +6369,14 @@ do_export_pdf() {
   /* Cover page */
   .cover { page-break-after: always; text-align: center; padding-top: 80px; }
   .cover h1 { font-size: 32pt; color: #0f3460; margin-bottom: 8px; border: none; }
-  .cover .subtitle { font-size: 14pt; color: #555; margin-bottom: 40px; }
+  .cover .subtitle { font-size: 14pt; color: #555; margin-bottom: 20px; }
   .cover .logo-icon { font-size: 72pt; margin-bottom: 20px; }
+
+  /* Brand in all page headers (weasyprint/Chrome) */
+  .page-brand-header { display: none; }
+  @media print {
+    .page-brand-header { display: block; font-size: 24px; font-weight: 600; color: #0f3460; text-align: center; padding: 4px 0; }
+  }
   .cover .meta-table { margin: 40px auto; border-collapse: collapse; width: 70%; }
   .cover .meta-table td { padding: 8px 16px; border-bottom: 1px solid #ddd; font-size: 10pt; }
   .cover .meta-table td:first-child { font-weight: bold; color: #0f3460; width: 40%; text-align: right; padding-right: 20px; }
@@ -6427,24 +6451,29 @@ PDFSTYLE
 
     # ─── COVER PAGE ───
     # Build logo HTML
+    # ── UUID ──
+    [[ -z "$PDF_UUID" ]] && PDF_UUID=$(_generate_uuid)
+    local _report_name="${PDF_BRAND:-Lenoos Net Audit} — ${target_list}"
+
     local _logo_html=""
+    local _ls="${PDF_LOGO_SIZE:-64}"
     if [[ -n "$PDF_LOGO" && -f "$PDF_LOGO" ]]; then
         local _logo_mime="image/png"
         [[ "$PDF_LOGO" == *.svg ]] && _logo_mime="image/svg+xml"
         local _logo_b64
         _logo_b64=$(base64 -w0 "$PDF_LOGO" 2>/dev/null || base64 "$PDF_LOGO" 2>/dev/null)
         if [[ -n "$_logo_b64" ]]; then
-            _logo_html="<img src=\"data:${_logo_mime};base64,${_logo_b64}\" style=\"max-height:90px;max-width:280px;margin-bottom:15px;\" alt=\"Logo\" />"
+            _logo_html="<img src=\"data:${_logo_mime};base64,${_logo_b64}\" style=\"height:${_ls}px;width:auto;max-width:280px;object-fit:contain;margin-bottom:15px;\" alt=\"Logo\" />"
         fi
     fi
     [[ -z "$_logo_html" ]] && _logo_html='<div class="logo-icon">🛡️</div>'
 
-    # Build QR code HTML
+    # Build QR code HTML (baseurl/uuid)
+    local _qr_url=""
     local _qr_html=""
     if [[ -n "$PDF_REF_BASE_URL" ]]; then
-        local _qr_data="${PDF_REF_BASE_URL}"
-        [[ -n "$PDF_FILENAME" ]] && _qr_data="${_qr_data}/${PDF_FILENAME}"
-        _qr_html=$(_generate_qr_svg "$_qr_data" 120)
+        _qr_url="${PDF_REF_BASE_URL%/}/${PDF_UUID}"
+        _qr_html=$(_generate_qr_svg "$_qr_url" 120)
     fi
 
     cat >> "$html_tmp" <<COVER
@@ -6452,6 +6481,7 @@ PDFSTYLE
   ${_logo_html}
   <h1>${PDF_BRAND:-Lenoos Net Audit} — Security Audit Report</h1>
   <div class="subtitle">Lenoos Net Audit v1.0.1 — Swiss Army Knife for Network Security</div>
+  <div style="font-size:9pt;color:#888;margin-bottom:10px;">Report ID: <code>${PDF_UUID}</code></div>
   <table class="meta-table">
     <tr><td>Target(s)</td><td><strong>${target_list}</strong></td></tr>
     <tr><td>Test Date</td><td>${test_date}</td></tr>
@@ -6483,7 +6513,7 @@ COVER2
   <div style="margin-top:20px;text-align:center;">
     <p style="font-size:9pt;color:#666;margin-bottom:5px;">Scan to access report online:</p>
     ${_qr_html}
-    <p style="font-size:8pt;color:#888;">${PDF_REF_BASE_URL}</p>
+    <p style="font-size:8pt;color:#888;">${_qr_url}</p>
   </div>
 QRBLOCK
     fi
@@ -6812,14 +6842,29 @@ EXTROW
   <li><a href="https://www.rfc-editor.org/rfc/rfc7858">RFC 7858 — DNS over TLS (DoT)</a></li>
 </ol>
 </div>
+REFS
 
+    # ─── FOOTER (with QR + UUID) ───
+    cat >> "$html_tmp" <<FOOTER1
 <footer>
   <p>${PDF_BRAND:-Lenoos Net Audit} v1.0.1 — Report generated on ${test_date} from ${hostname_str}</p>
-  <p>This report is for authorized security testing purposes only.</p>
+  <p>Report ID: <code style="font-size:9pt;">${PDF_UUID}</code></p>
+FOOTER1
+    # QR code on end page
+    if [[ -n "$_qr_html" ]]; then
+        cat >> "$html_tmp" <<FOOTERQR
+  <div style="margin:15px auto;text-align:center;">
+    ${_qr_html}
+    <p style="font-size:8pt;color:#888;">${_qr_url}</p>
+  </div>
+FOOTERQR
+    fi
+    cat >> "$html_tmp" <<FOOTER2
+  <p style="font-size:9pt;color:#888;">This report is for authorized security testing purposes only.</p>
 </footer>
 </body>
 </html>
-REFS
+FOOTER2
 
     # ─── Convert HTML to PDF ───
     echo -e "  ${CYAN}Generating PDF report...${NC}"
@@ -6836,10 +6881,10 @@ REFS
             --margin-left 12mm \
             --margin-right 12mm \
             --header-spacing 5 \
-            --header-font-size 8 \
+            --header-font-size 10 \
             --header-font-name "Arial" \
-            --header-left "${PDF_BRAND:-Lenoos Net Audit} v1.0.1" \
-            --header-right "${target_list}" \
+            --header-left "${PDF_BRAND:-Lenoos Net Audit}" \
+            --header-right "" \
             --footer-spacing 5 \
             --footer-font-size 8 \
             --footer-font-name "Arial" \
@@ -6872,9 +6917,14 @@ REFS
     if $_pdf_ok && [[ -f "$pdf_file" ]]; then
         local pdf_size
         pdf_size=$(du -h "$pdf_file" 2>/dev/null | awk '{print $1}')
-        echo -e "  ${GREEN}✓ PDF report generated: ${BOLD}${pdf_file}${NC} ${GREEN}(${pdf_size}) [${_pdf_backend}]${NC}"
+        local _display_name
+        _display_name=$(basename "$pdf_file")
+        echo -e "  ${GREEN}✓ PDF report: ${BOLD}${_display_name}${NC} ${GREEN}(${pdf_size}) [${_pdf_backend}]${NC}"
+        echo -e "  ${CYAN}  UUID: ${BOLD}${PDF_UUID}${NC}"
+        [[ -n "$_qr_url" ]] && echo -e "  ${CYAN}  URL:  ${BOLD}${_qr_url}${NC}"
+        echo -e "  ${CYAN}  Path: ${pdf_file}${NC}"
     else
-        echo -e "  ${RED}✗ PDF generation failed (${_pdf_backend}). HTML saved: ${html_tmp}${NC}"
+        echo -e "  ${RED}✗ PDF generation failed (${_pdf_backend}).${NC}"
         return 1
     fi
 
@@ -7317,7 +7367,7 @@ stream_capture() {
 # ====================== ARG PARSING ======================
 DO_SNI=false
 
-while getopts "46ijudrcstgap:bse:o:n:W:T:F:X:ADOBSPVM:E:w:" opt; do
+while getopts "46ijudrcstgap:bse:o:n:W:T:F:X:ADOBSPVM:E:w:R:" opt; do
   case $opt in
     i) DO_IP=true ;;
     j) install_deps ;;
@@ -7350,6 +7400,7 @@ while getopts "46ijudrcstgap:bse:o:n:W:T:F:X:ADOBSPVM:E:w:" opt; do
     o) STREAM_FMT=$OPTARG ;;
     E) DO_PROM=true; PROM_PORT=$OPTARG ;;
     w) DO_WATCH=true; WATCH_INTERVAL=$OPTARG ;;
+    R) PDF_UUID=$OPTARG ;;
     *) show_usage ;;
   esac
 done
