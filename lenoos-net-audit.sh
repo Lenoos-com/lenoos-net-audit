@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# LENOOS NET AUDIT v1.0.1 — Swiss Army Knife for Network Security & Diagnostics
+# LENOOS NET AUDIT v1.0.2 — Swiss Army Knife for Network Security & Diagnostics
 #   • SNI FULL DETAILS: TLS version, ALPN, cipher, SAN list, SNI fragmentation
 #   • COLORFUL PORT SCAN: green=open, red=closed/filtered, with service names
 #   • ENHANCED DPI: TCP RST detect, HTTP inject, TLS fingerprint, fragment test
@@ -179,7 +179,7 @@ _generate_qr_svg() {
 show_usage() {
     echo ""
     sep "=" 72
-    echo -e "  ${BOLD}${CYAN}LENOOS NET AUDIT v1.0.1 — Swiss Army Knife for Network Security${NC}"
+    echo -e "  ${BOLD}${CYAN}LENOOS NET AUDIT v1.0.2 — Swiss Army Knife for Network Security${NC}"
     sep "=" 72
     echo -e "  ${BOLD}USAGE:${NC}  sudo bash $0 [FLAGS] [TARGETS]"
     echo ""
@@ -228,7 +228,7 @@ show_usage() {
     echo -e "    sudo bash $0 ${YELLOW}-E 9101 -w 300 -drtcabgs${NC} site.com ${DIM}# Prometheus + watch every 5m${NC}"
     echo -e "    sudo bash $0 ${YELLOW}-E 9200 -drc${NC} site.com        ${DIM}# one-shot Prometheus on :9200${NC}"
     sep "-" 72
-    echo -e "  ${GREEN}v1.0.1: Lenoos Net Audit — swiss army for network security & diagnostics${NC}"
+    echo -e "  ${GREEN}v1.0.2: Lenoos Net Audit — swiss army for network security & diagnostics${NC}"
     echo ""
     exit 1
 }
@@ -5761,7 +5761,7 @@ _prom_format_metrics() {
     cat <<PROMEOF
 # HELP lenoos_audit_info Audit suite metadata (always 1).
 # TYPE lenoos_audit_info gauge
-lenoos_audit_info{version="v1.0.1",hostname="$(hostname 2>/dev/null)",os="$(uname -s 2>/dev/null)",kernel="$(uname -r 2>/dev/null)"} 1
+lenoos_audit_info{version="v1.0.2",hostname="$(hostname 2>/dev/null)",os="$(uname -s 2>/dev/null)",kernel="$(uname -r 2>/dev/null)"} 1
 
 # HELP lenoos_audit_runs_total Total number of audit cycles completed (counter).
 # TYPE lenoos_audit_runs_total counter
@@ -6482,7 +6482,7 @@ PDFSTYLE
 <div class="cover">
   ${_logo_html}
   <h1>${PDF_BRAND:-Lenoos Net Audit} — Security Audit Report</h1>
-  <div class="subtitle">Lenoos Net Audit v1.0.1 — Swiss Army Knife for Network Security</div>
+  <div class="subtitle">Lenoos Net Audit v1.0.2 — Swiss Army Knife for Network Security</div>
   <div style="font-size:9pt;color:#888;margin-bottom:10px;">Report ID: <code>${PDF_UUID}</code></div>
   <table class="meta-table">
     <tr><td>Target(s)</td><td><strong>${target_list}</strong></td></tr>
@@ -6491,7 +6491,7 @@ PDFSTYLE
     <tr><td>Test Duration</td><td>${dur_str} (${duration}s)</td></tr>
     <tr><td>Modules Executed</td><td>${modules_list}</td></tr>
     <tr><td>Command</td><td><code>${_ORIGINAL_CMD}</code></td></tr>
-    <tr><td>Suite Version</td><td>v1.0.1</td></tr>
+    <tr><td>Suite Version</td><td>v1.0.2</td></tr>
     <tr><td>Hostname</td><td>${hostname_str}</td></tr>
     <tr><td>Operating System</td><td>${os_info}</td></tr>
     <tr><td>Kernel</td><td>${kernel_info}</td></tr>
@@ -6588,7 +6588,7 @@ TOCFOOT
   <tr><td>CPU Cores</td><td>${cpu_cores}</td></tr>
   <tr><td>RAM Total</td><td>${ram_total}</td></tr>
   <tr><td>RAM Used</td><td>${ram_used}</td></tr>
-  <tr><td>Suite Version</td><td>v1.0.1</td></tr>
+  <tr><td>Suite Version</td><td>v1.0.2</td></tr>
   <tr><td>Test Date</td><td>${test_date}</td></tr>
   <tr><td>Test Duration</td><td>${dur_str}</td></tr>
   <tr><td>Workers</td><td>${MAX_WORKERS}</td></tr>
@@ -6849,7 +6849,7 @@ REFS
     # ─── FOOTER (with QR + UUID) ───
     cat >> "$html_tmp" <<FOOTER1
 <footer>
-  <p>${PDF_BRAND:-Lenoos Net Audit} v1.0.1 — Report generated on ${test_date} from ${hostname_str}</p>
+  <p>${PDF_BRAND:-Lenoos Net Audit} v1.0.2 — Report generated on ${test_date} from ${hostname_str}</p>
   <p>Report ID: <code style="font-size:9pt;">${PDF_UUID}</code></p>
 FOOTER1
     # QR code on end page
@@ -6958,7 +6958,7 @@ do_export() {
             {
                 echo "{"
                 echo "  \"generated\": \"$(date -Iseconds)\","
-                echo "  \"version\": \"v1.0.1\","
+                echo "  \"version\": \"v1.0.2\","
                 echo "  \"targets\": ["
                 local first_t=true
                 for T in "${TARGETS[@]}"; do
@@ -7015,7 +7015,7 @@ do_export() {
   footer{margin-top:2em;color:#666;font-size:.85em}
 </style></head><body>
 HTMLHEAD
-                echo "<h1>Lenoos Net Audit Report — v1.0.1</h1>"
+                echo "<h1>Lenoos Net Audit Report — v1.0.2</h1>"
                 echo "<p>Generated: $(date)</p>"
                 echo "<table>"
                 echo "<tr><th>Target</th><th>DNS</th><th>MTR Loss</th><th>Cert Days</th><th>Speed MB/s</th><th>DPI Status</th><th>DPI Score</th><th>DPI RST</th><th>DPI Inject</th><th>DPI Frag</th><th>Bypass</th><th>TLS Ver</th><th>ALPN</th><th>Cipher</th><th>SNI Status</th><th>Ports Open</th><th>Ports Closed</th></tr>"
@@ -7048,7 +7048,7 @@ HTMLHEAD
                     echo "</tr>"
                 done
                 echo "</table>"
-                echo "<footer>Lenoos Net Audit v1.0.1 — $(date)</footer>"
+                echo "<footer>Lenoos Net Audit v1.0.2 — $(date)</footer>"
                 echo "</body></html>"
             } > "$file"
             ;;
@@ -7058,7 +7058,7 @@ HTMLHEAD
                 echo '<?xml version="1.0" encoding="UTF-8"?>'
                 echo "<audit>"
                 echo "  <generated>$(date -Iseconds)</generated>"
-                echo "  <version>v1.0.1</version>"
+                echo "  <version>v1.0.2</version>"
                 for T in "${TARGETS[@]}"; do
                     echo "  <target name=\"$T\">"
                     echo "    <dns>${RES_DNS[$T]:-N/A}</dns>"
@@ -7087,7 +7087,7 @@ HTMLHEAD
             {
                 echo "---"
                 echo "generated: \"$(date -Iseconds)\""
-                echo "version: v1.0.1"
+                echo "version: v1.0.2"
                 echo "targets:"
                 for T in "${TARGETS[@]}"; do
                     echo "  - target: \"$T\""
@@ -7159,12 +7159,12 @@ stream_init() {
             echo '{'
             echo '  "stream": true,'
             echo "  \"generated\": \"$ts\","
-            echo '  "version": "v1.0.1",'
+            echo '  "version": "v1.0.2",'
             echo '  "events": ['
             ;;
         xml)
             echo '<?xml version="1.0" encoding="UTF-8"?>'
-            echo '<audit-stream version="v1.0.1">'
+            echo '<audit-stream version="v1.0.2">'
             echo "  <generated>$ts</generated>"
             ;;
         html)
@@ -7181,18 +7181,18 @@ stream_init() {
   footer{margin-top:2em;color:#666;font-size:.85em}
 </style></head><body>
 SHTML
-            echo "<h1>Lenoos Net Audit Stream — v1.0.1</h1>"
+            echo "<h1>Lenoos Net Audit Stream — v1.0.2</h1>"
             echo "<p class=\"meta\">Generated: $ts</p>"
             ;;
         yaml)
             echo '---'
             echo "generated: \"$ts\""
-            echo 'version: v1.0.1'
+            echo 'version: v1.0.2'
             echo 'stream: true'
             echo 'events:'
             ;;
         text|*)
-            echo "=== LENOOS NET AUDIT STREAM v1.0.1 ==="
+            echo "=== LENOOS NET AUDIT STREAM v1.0.2 ==="
             echo "Generated: $ts"
             echo ""
             ;;
@@ -7331,7 +7331,7 @@ stream_close() {
             echo '</audit-stream>'
             ;;
         html)
-            echo "<footer>Stream completed: $ts | $_STREAM_SEQ events | Lenoos Net Audit v1.0.1</footer>"
+            echo "<footer>Stream completed: $ts | $_STREAM_SEQ events | Lenoos Net Audit v1.0.2</footer>"
             echo '</body></html>'
             ;;
         yaml)
@@ -7768,4 +7768,4 @@ if $_STREAM_ACTIVE; then
     fi
 fi
 
-echo -e "\n${GREEN}Lenoos Net Audit v1.0.1 completed. Stay secure & uncensored!${NC}"
+echo -e "\n${GREEN}Lenoos Net Audit v1.0.2 completed. Stay secure & uncensored!${NC}"
