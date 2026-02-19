@@ -9,21 +9,26 @@ This project follows [Semantic Versioning](https://semver.org/) (SemVer):
 
 ---
 
-## [1.0.2] — 2025-06-24
+## [1.0.2] — 2026-02-19
 
 ### Added
 - **Rebranded to Lenoos Net Audit** — app renamed from "net-audit" / "Ultimate OSI Forensic & Performance Suite" to **Lenoos Net Audit** (`lenoos-net-audit.sh`). All headers, banners, PDF reports, Prometheus metrics, export filenames, stream output, and Dockerfile updated.
 - **`pdf.conf` branding support** — optional configuration file for PDF report customization. Supports: `PDF_LOGO` (PNG/SVG), `PDF_BRAND`, `PDF_AUTHOR`, `PDF_FILENAME`, `PDF_WEBSITE`, `PDF_EMAIL`, `PDF_PHONE`, `PDF_CONTACT_PERSON`, `PDF_TEST_ENV`, `PDF_LAB_DETAILS`, `PDF_REF_BASE_URL`. Searched in `./pdf.conf`, `<script_dir>/pdf.conf`, `~/.config/lenoos/pdf.conf`.
-- **QR code on PDF cover page** — generates SVG QR code from `PDF_REF_BASE_URL` + filename using local `qrencode` or api.qrserver.com fallback.
+- **UUID-based report tracking (`-R <uuid>`)** — each report is assigned a unique UUID v4 (auto-generated or set via `-R` flag / `PDF_UUID` in `pdf.conf`). UUID is used in default filenames, QR codes, and cover/end page display.
+- **UUID-based filenames** — auto-generated export and stream filenames now use the report UUID instead of a timestamp (e.g., `lenoos-audit-<uuid>.pdf`). Custom paths via `-n` still override.
+- **QR code on PDF cover page and end page** — generates SVG QR code from `PDF_REF_BASE_URL/<uuid>` using local `qrencode` or api.qrserver.com fallback. Displayed on both cover and final page for easy scanning.
+- **Configurable cover page logo size (`PDF_LOGO_SIZE`)** — set logo height in pixels (default: `64`); width scales proportionally. Configurable in `pdf.conf` or as default.
+- **Brand name in page headers** — `PDF_BRAND` is displayed in all HTML page headers with font-size 24px and font-weight 600.
 - **Default `exports/` directory** — all export/stream output files now default to an `exports/` subdirectory (auto-created). Custom paths via `-n` still override.
 - **Sample `pdf.conf`** — documented config template included in the repository.
 
 ### Changed
 - **Prometheus metric prefix** — renamed from `osi_*` to `lenoos_*` (e.g., `lenoos_audit_info`, `lenoos_dns_ok`). Update your Grafana dashboards accordingly.
-- **Export filenames** — default prefix changed from `osi-audit-` to `lenoos-audit-`, stream files from `osi-stream-` to `lenoos-stream-`.
+- **Export filenames** — default prefix changed from `osi-audit-` to `lenoos-audit-`, stream files from `osi-stream-` to `lenoos-stream-`. Filenames use UUID instead of timestamp.
 - **Temp file prefixes** — changed from `osi-` to `lenoos-` for all temp files.
 - **Dockerfile** — updated paths to `/opt/lenoos-net-audit/`, copies `pdf.conf`, creates `exports/` directory.
 - **Renamed `VersionHistory.md`** → `CHANGES.md`.
+- **PDF success message** — now shows report display name, UUID, QR URL, and full path instead of the temp HTML file path.
 
 ---
 

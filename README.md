@@ -1,6 +1,6 @@
 # Lenoos Net Audit
 
-> **v1.0.1** — Swiss Army Knife for Network Security & Diagnostics. A comprehensive, all-in-one Bash toolkit for network forensics, security auditing, censorship detection, vulnerability assessment, AI-powered pentesting, and performance stress testing.
+> **v1.0.2** — Swiss Army Knife for Network Security & Diagnostics. A comprehensive, all-in-one Bash toolkit for network forensics, security auditing, censorship detection, vulnerability assessment, AI-powered pentesting, and performance stress testing.
 
 ---
 
@@ -54,6 +54,7 @@ Key design principles:
 - **Parallel execution** — scan hundreds of targets simultaneously with `-W`.
 - **Rich terminal output** — colour-coded sections, progress bars, histograms, and scorecards.
 - **Multi-format export** — save results as JSON, CSV, HTML, XML, YAML, or PDF (rich report with cover page, ToC, and page numbers).
+- **UUID-based report tracking** — each report gets a unique UUID (auto-generated or set via `-R`). Used in filenames, QR codes, and cover/end pages.
 - **Custom export path** — specify custom file path and name with `-n` for any export format.
 - **Streaming output** — pipe structured JSON/YAML/XML/HTML/text to stdout for CI/CD, logging, and tool chaining.
 - **Prometheus exporter** — serve `/metrics` on a customizable port for Grafana dashboards with gauges, counters, histograms.
@@ -256,6 +257,7 @@ When multiple targets are given, they are processed sequentially — or in paral
 | `-o` | `<format>` | Stream output — `json`, `yaml`, `html`, `xml`, `text` (pipe to stdout or file) |
 | `-E` | `<port>` | Prometheus metrics exporter on given port (default `9101`). Serves `/metrics` |
 | `-w` | `<seconds>` | Watch mode — re-run audit every N seconds (minimum 5). Use with `-E` for Grafana |
+| `-R` | `<uuid>` | Set report UUID manually (default: auto-generated UUID v4). Used in filenames, QR codes, and report tracking. |
 
 ---
 
@@ -487,7 +489,7 @@ sudo ./lenoos-net-audit.sh example.com -d -e csv -n output.csv
 sudo ./lenoos-net-audit.sh example.com -d -e html -n /opt/audits/weekly/report.html
 ```
 
-Without `-n`, files are saved to the `exports/` subdirectory as `lenoos-audit-YYYYMMDD_HHMMSS.<format>`.
+Without `-n`, files are saved to the `exports/` subdirectory as `lenoos-audit-<uuid>.<format>`, where `<uuid>` is automatically generated (or set via `-R`).
 
 ### PDF Branding (`pdf.conf`)
 
@@ -502,7 +504,8 @@ Customize PDF report appearance by creating a `pdf.conf` file. The script search
 | Key | Description |
 |---|---|
 | `PDF_LOGO` | Path to a PNG or SVG logo (embedded as base64 in the cover page) |
-| `PDF_BRAND` | Brand / company name displayed on cover page and headers |
+| `PDF_LOGO_SIZE` | Logo height in pixels on cover page (default: `64`). Width scales proportionally. |
+| `PDF_BRAND` | Brand / company name displayed on cover page and all page headers (font-size 24px, weight 600) |
 | `PDF_AUTHOR` | Report author name |
 | `PDF_FILENAME` | Custom filename template. Placeholders: `{targets}`, `{date}` |
 | `PDF_WEBSITE` | Company website URL |
@@ -511,7 +514,8 @@ Customize PDF report appearance by creating a `pdf.conf` file. The script search
 | `PDF_CONTACT_PERSON` | Name of the contact person |
 | `PDF_TEST_ENV` | Description of test environment (e.g., "Production", "Staging") |
 | `PDF_LAB_DETAILS` | Lab / infrastructure details |
-| `PDF_REF_BASE_URL` | Base URL for QR code — encodes `<base_url>/<filename>` on the cover page |
+| `PDF_REF_BASE_URL` | Base URL for QR code — encodes `<base_url>/<uuid>` on cover page and end page |
+| `PDF_UUID` | Report UUID. Auto-generated (UUID v4) if empty. Can also be set via `-R <uuid>` flag. Used in filenames, QR codes, and report tracking. |
 
 A sample `pdf.conf` is included in the repository.
 
@@ -777,7 +781,7 @@ docker run -d --name lenoos-prom -p 9101:9101 \
 ## Architecture
 
 ```
-lenoos-net-audit.sh (single file, ~7700+ lines)
+lenoos-net-audit.sh (single file, ~7770+ lines)
 │
 ├── Configuration          (pdf.conf branding, exports/ directory)
 ├── Identity & Setup       (-i, -j)
@@ -835,7 +839,7 @@ lenoos-net-audit.sh (single file, ~7700+ lines)
 
 See [CHANGES.md](CHANGES.md) for a detailed changelog following [Semantic Versioning](https://semver.org/).
 
-**Current version:** v1.0.1
+**Current version:** v1.0.2
 
 ---
 

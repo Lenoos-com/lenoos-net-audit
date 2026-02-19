@@ -6299,6 +6299,9 @@ do_export_pdf() {
     # Load branding from pdf.conf if present
     _load_pdf_conf
 
+    # Generate UUID early so it can be used for filenames
+    [[ -z "$PDF_UUID" ]] && PDF_UUID=$(_generate_uuid)
+
     _AUDIT_END=$(date +%s)
     local duration=$(( _AUDIT_END - _AUDIT_START ))
     local dur_min=$(( duration / 60 ))
@@ -6314,10 +6317,10 @@ do_export_pdf() {
         dir=$(dirname "$pdf_file")
         [[ -n "$dir" && "$dir" != "." ]] && mkdir -p "$dir" 2>/dev/null
     elif [[ -n "$PDF_FILENAME" ]]; then
-        pdf_file="${EXPORT_DIR}/${PDF_FILENAME}-${ts}.pdf"
+        pdf_file="${EXPORT_DIR}/${PDF_FILENAME}-${PDF_UUID}.pdf"
         mkdir -p "$EXPORT_DIR" 2>/dev/null
     else
-        pdf_file="${EXPORT_DIR}/lenoos-audit-${ts}.pdf"
+        pdf_file="${EXPORT_DIR}/lenoos-audit-${PDF_UUID}.pdf"
         mkdir -p "$EXPORT_DIR" 2>/dev/null
     fi
     local test_date=$(date '+%Y-%m-%d %H:%M:%S %Z')
@@ -6451,8 +6454,7 @@ PDFSTYLE
 
     # ─── COVER PAGE ───
     # Build logo HTML
-    # ── UUID ──
-    [[ -z "$PDF_UUID" ]] && PDF_UUID=$(_generate_uuid)
+    # ── UUID (already generated before filename logic) ──
     local _report_name="${PDF_BRAND:-Lenoos Net Audit} — ${target_list}"
 
     local _logo_html=""
@@ -6936,7 +6938,7 @@ FOOTER2
 
 # ====================== EXPORT ======================
 do_export() {
-    local ts=$(date +%Y%m%d_%H%M%S)
+    [[ -z "$PDF_UUID" ]] && PDF_UUID=$(_generate_uuid)
     local file
     if [[ -n "$EXPORT_FILE" ]]; then
         file="$EXPORT_FILE"
@@ -6948,7 +6950,7 @@ do_export() {
         [[ -n "$dir" && "$dir" != "." ]] && mkdir -p "$dir" 2>/dev/null
     else
         mkdir -p "$EXPORT_DIR" 2>/dev/null
-        file="${EXPORT_DIR}/lenoos-audit-${ts}.${FMT}"
+        file="${EXPORT_DIR}/lenoos-audit-${PDF_UUID}.${FMT}"
     fi
 
     case $FMT in
@@ -7488,7 +7490,8 @@ if [[ -n "$STREAM_FMT" ]]; then
     else
         # stdout is a terminal: stream to file, terminal stays on stdout
         mkdir -p "$EXPORT_DIR" 2>/dev/null
-        STREAM_FILE="${EXPORT_DIR}/lenoos-stream-$(date +%Y%m%d_%H%M%S).${STREAM_FMT}"
+        [[ -z "$PDF_UUID" ]] && PDF_UUID=$(_generate_uuid)
+        STREAM_FILE="${EXPORT_DIR}/lenoos-stream-${PDF_UUID}.${STREAM_FMT}"
         exec 4>&1 5>"$STREAM_FILE"
     fi
     stream_init >&5
