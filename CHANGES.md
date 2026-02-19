@@ -9,11 +9,26 @@ This project follows [Semantic Versioning](https://semver.org/) (SemVer):
 
 ---
 
-## [1.0.2] — 2026-02-19
+## [1.0.3] — 2026-02-19
 
 ### Added
 - **Rebranded to Lenoos Net Audit** — app renamed from "net-audit" / "Ultimate OSI Forensic & Performance Suite" to **Lenoos Net Audit** (`lenoos-net-audit.sh`). All headers, banners, PDF reports, Prometheus metrics, export filenames, stream output, and Dockerfile updated.
 - **`pdf.conf` branding support** — optional configuration file for PDF report customization. Supports: `PDF_LOGO` (PNG/SVG), `PDF_BRAND`, `PDF_AUTHOR`, `PDF_FILENAME`, `PDF_WEBSITE`, `PDF_EMAIL`, `PDF_PHONE`, `PDF_CONTACT_PERSON`, `PDF_TEST_ENV`, `PDF_LAB_DETAILS`, `PDF_REF_BASE_URL`. Searched in `./pdf.conf`, `<script_dir>/pdf.conf`, `~/.config/lenoos/pdf.conf`.
+- **`owasp.conf` multi-target endpoint testing** — new configuration file for OWASP API/path security testing with full multi-target support. Supports:
+  - **Multi-target**: `[target:domain.com] ... [/target]` blocks with per-target settings, endpoints, and suites
+  - Per-target `ENABLED=true|false` to enable/disable OWASP for specific targets
+  - Per-target `INHERIT_GLOBAL=true|false` to inherit or ignore global endpoints/suites
+  - Per-target setting overrides (`SWAGGER_URL`, `AUTH_HEADER`, `TIMEOUT`, etc.)
+  - Simple path/glob patterns (e.g., `/api/v1/*`)
+  - Full endpoint specs: `METHOD|PATH|CONTENT_TYPE|BODY|EXPECT_STATUS|DESCRIPTION`
+  - Swagger/OpenAPI auto-discovery (`SWAGGER_URL`) — Swagger 2.0 and OpenAPI 3.x (JSON + YAML), per-target or global
+  - Test suite blocks (`[suite:Name] ... [/suite]`) at global or target scope with per-suite scoring/grading
+  - Per-endpoint security checks: auth enforcement, status validation, security headers, error disclosure, sensitive data leak, rate limiting, response time
+  - Per-endpoint advisory with detailed findings and recommendations
+  - Shared `_owasp_run_endpoint_tests()` runner used by both native OWASP (`-O`) and AI-based (`-M`) pentest modules
+  - Configurable auth headers, extra headers, timeouts, SSL verification
+  - Searched in `./owasp.conf`, `<script_dir>/owasp.conf`, `~/.config/lenoos/owasp.conf`
+  - Sample `owasp.conf` included with multi-target examples
 - **UUID-based report tracking (`-R <uuid>`)** — each report is assigned a unique UUID v4 (auto-generated or set via `-R` flag / `PDF_UUID` in `pdf.conf`). UUID is used in default filenames, QR codes, and cover/end page display.
 - **UUID-based filenames** — auto-generated export and stream filenames now use the report UUID instead of a timestamp (e.g., `lenoos-audit-<uuid>.pdf`). Custom paths via `-n` still override.
 - **QR code on PDF cover page and end page** — generates SVG QR code from `PDF_REF_BASE_URL/<uuid>` using local `qrencode` or api.qrserver.com fallback. Displayed on both cover and final page for easy scanning.

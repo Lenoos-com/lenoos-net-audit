@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# LENOOS NET AUDIT v1.0.2 — Swiss Army Knife for Network Security & Diagnostics
+# LENOOS NET AUDIT v1.0.3 — Swiss Army Knife for Network Security & Diagnostics
 #   • SNI FULL DETAILS: TLS version, ALPN, cipher, SAN list, SNI fragmentation
 #   • COLORFUL PORT SCAN: green=open, red=closed/filtered, with service names
 #   • ENHANCED DPI: TCP RST detect, HTTP inject, TLS fingerprint, fragment test
@@ -12,7 +12,7 @@
 # =============================================================================
 
 set -o pipefail
-VERSION="v1.0.2"
+VERSION="v1.0.3"
 _ORIGINAL_CMD="$0 $*"
 _AUDIT_START=$(date +%s)
 
@@ -174,6 +174,637 @@ _generate_qr_svg() {
     local encoded
     encoded="$(echo -n "$data" | sed 's/ /%20/g;s/&/%26/g;s/?/%3F/g;s/=/%3D/g;s/#/%23/g')"
     echo "<img src=\"https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encoded}\" width=\"${size}\" height=\"${size}\" alt=\"QR Code\" style=\"display:block;margin:10px auto;\" />"
+}
+
+# ====================== OWASP.CONF — MULTI-TARGET API / PATH TESTING CONFIG ======================
+#
+# Format:
+#   Global settings / paths / endpoints / suites at top level.
+#   [target:domain.com] ... [/target]  blocks override per-target.
+#   Each target block can set ENABLED=false to skip OWASP for that target,
+#   INHERIT_GLOBAL=false to ignore global paths/endpoints/suites,
+#   and override any global setting (SWAGGER_URL, AUTH_HEADER, etc.).
+#
+OWASP_CONF_LOADED=false
+OWASP_CONF_FILE=""                     # path to loaded owasp.conf
+
+# Global defaults
+OWASP_G_SWAGGER_URL=""
+OWASP_G_BASE_URL=""
+OWASP_G_AUTH_HEADER=""
+OWASP_G_EXTRA_HEADERS=""
+OWASP_G_TIMEOUT=10
+OWASP_G_VERIFY_SSL=true
+
+declare -a  OWASP_G_ENDPOINTS=()       # global endpoint specs
+declare -a  OWASP_G_SUITES=()          # global suite names
+declare -A  OWASP_G_SUITE_TESTS=()     # suite_name -> newline-separated specs
+
+# Per-target storage  (keyed by lowercase domain)
+declare -a  OWASP_TARGETS=()           # list of [target:...] domains found in conf
+declare -A  OWASP_T_ENABLED=()         # domain -> true|false
+declare -A  OWASP_T_INHERIT=()         # domain -> true|false  (inherit global, default true)
+declare -A  OWASP_T_SWAGGER_URL=()
+declare -A  OWASP_T_BASE_URL=()
+declare -A  OWASP_T_AUTH_HEADER=()
+declare -A  OWASP_T_EXTRA_HEADERS=()
+declare -A  OWASP_T_TIMEOUT=()
+declare -A  OWASP_T_VERIFY_SSL=()
+declare -A  OWASP_T_ENDPOINTS=()       # domain -> newline-separated endpoint specs
+declare -A  OWASP_T_SUITES=()          # domain -> space-separated suite names
+declare -A  OWASP_T_SUITE_TESTS=()     # domain::suite -> newline-separated specs
+
+# ── Load & parse owasp.conf ──────────────────────────────────────────────
+_load_owasp_conf() {
+    # Prevent double-loading
+    $OWASP_CONF_LOADED && return 0
+
+    local conf=""
+    local _script_dir
+    _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    for _p in "./owasp.conf" "${_script_dir}/owasp.conf" "${HOME}/.config/lenoos/owasp.conf"; do
+        [[ -f "$_p" ]] && { conf="$_p"; break; }
+    done
+    [[ -z "$conf" ]] && return 0
+
+    echo -e "  ${CYAN}[OWASP] Loading config from: ${BOLD}${conf}${NC}"
+    OWASP_CONF_LOADED=true
+    OWASP_CONF_FILE="$conf"
+
+    local current_target=""       # empty = global scope
+    local current_suite=""        # current [suite:X] name
+    local current_suite_ns=""     # namespace: "" (global) or "domain::"
+
+    while IFS= read -r line; do
+        line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+
+        # ── [target:domain.com] ──
+        if [[ "$line" =~ ^\[target:(.+)\]$ ]]; then
+            current_target="${BASH_REMATCH[1]}"
+            current_target="${current_target,,}"           # lowercase
+            current_suite="" ; current_suite_ns="${current_target}::"
+            if [[ -z "${OWASP_T_ENABLED[$current_target]+x}" ]]; then
+                OWASP_TARGETS+=("$current_target")
+                OWASP_T_ENABLED["$current_target"]=true
+                OWASP_T_INHERIT["$current_target"]=true
+                OWASP_T_ENDPOINTS["$current_target"]=""
+                OWASP_T_SUITES["$current_target"]=""
+            fi
+            continue
+        fi
+
+        # ── [/target] ──
+        if [[ "$line" == "[/target]" ]]; then
+            current_target="" ; current_suite="" ; current_suite_ns=""
+            continue
+        fi
+
+        # ── [suite:SuiteName] ──
+        if [[ "$line" =~ ^\[suite:(.+)\]$ ]]; then
+            current_suite="${BASH_REMATCH[1]}"
+            if [[ -n "$current_target" ]]; then
+                OWASP_T_SUITES["$current_target"]+="${current_suite} "
+                OWASP_T_SUITE_TESTS["${current_target}::${current_suite}"]=""
+            else
+                OWASP_G_SUITES+=("$current_suite")
+                OWASP_G_SUITE_TESTS["$current_suite"]=""
+            fi
+            continue
+        fi
+
+        # ── [/suite] ──
+        if [[ "$line" == "[/suite]" ]]; then
+            current_suite=""
+            continue
+        fi
+
+        # ── Key=value settings ──
+        if [[ "$line" == *"="* && -z "$current_suite" ]]; then
+            local key="${line%%=*}" val="${line#*=}"
+            key="$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+            val="$(echo "$val" | sed "s/^[[:space:]]*//;s/[[:space:]]*$//;s/^\"//;s/\"$//")"
+
+            if [[ -n "$current_target" ]]; then
+                # Per-target setting
+                case "$key" in
+                    swagger_url|swagger)    OWASP_T_SWAGGER_URL["$current_target"]="$val" ;;
+                    base_url)               OWASP_T_BASE_URL["$current_target"]="$val" ;;
+                    auth_header|auth)       OWASP_T_AUTH_HEADER["$current_target"]="$val" ;;
+                    extra_headers|headers)  OWASP_T_EXTRA_HEADERS["$current_target"]="$val" ;;
+                    timeout)               OWASP_T_TIMEOUT["$current_target"]="$val" ;;
+                    verify_ssl)            OWASP_T_VERIFY_SSL["$current_target"]="$val" ;;
+                    enabled)               OWASP_T_ENABLED["$current_target"]="$val" ;;
+                    inherit_global|inherit) OWASP_T_INHERIT["$current_target"]="$val" ;;
+                esac
+            else
+                # Global setting
+                case "$key" in
+                    swagger_url|swagger)    OWASP_G_SWAGGER_URL="$val" ;;
+                    base_url)               OWASP_G_BASE_URL="$val" ;;
+                    auth_header|auth)       OWASP_G_AUTH_HEADER="$val" ;;
+                    extra_headers|headers)  OWASP_G_EXTRA_HEADERS="$val" ;;
+                    timeout)               OWASP_G_TIMEOUT="$val" ;;
+                    verify_ssl)            OWASP_G_VERIFY_SSL="$val" ;;
+                esac
+            fi
+            continue
+        fi
+
+        # ── Path entry:  /api/v1/* ──
+        if [[ "$line" =~ ^/ && "$line" != *"|"* ]]; then
+            local ep_spec="GET|${line}||||path probe"
+            if [[ -n "$current_suite" ]]; then
+                if [[ -n "$current_target" ]]; then
+                    OWASP_T_SUITE_TESTS["${current_target}::${current_suite}"]+="${ep_spec}"$'\n'
+                else
+                    OWASP_G_SUITE_TESTS["$current_suite"]+="${ep_spec}"$'\n'
+                fi
+            elif [[ -n "$current_target" ]]; then
+                OWASP_T_ENDPOINTS["$current_target"]+="${ep_spec}"$'\n'
+            else
+                OWASP_G_ENDPOINTS+=("$ep_spec")
+            fi
+            continue
+        fi
+
+        # ── Full endpoint spec: METHOD|PATH|CONTENT_TYPE|BODY|EXPECT_STATUS|DESC ──
+        if [[ "$line" == *"|"* ]]; then
+            if [[ -n "$current_suite" ]]; then
+                if [[ -n "$current_target" ]]; then
+                    OWASP_T_SUITE_TESTS["${current_target}::${current_suite}"]+="${line}"$'\n'
+                else
+                    OWASP_G_SUITE_TESTS["$current_suite"]+="${line}"$'\n'
+                fi
+            elif [[ -n "$current_target" ]]; then
+                OWASP_T_ENDPOINTS["$current_target"]+="${line}"$'\n'
+            else
+                OWASP_G_ENDPOINTS+=("$line")
+            fi
+            continue
+        fi
+    done < "$conf"
+
+    # Summary
+    local g_ep=${#OWASP_G_ENDPOINTS[@]} g_su=${#OWASP_G_SUITES[@]} t_count=${#OWASP_TARGETS[@]}
+    echo -e "  ${CYAN}[OWASP] Global endpoints: ${BOLD}${g_ep}${NC}${CYAN}, Global suites: ${BOLD}${g_su}${NC}${CYAN}, Targets: ${BOLD}${t_count}${NC}${CYAN}, Swagger: ${BOLD}${OWASP_G_SWAGGER_URL:-none}${NC}"
+    for _td in "${OWASP_TARGETS[@]}"; do
+        local _te="${OWASP_T_ENABLED[$_td]}" _ti="${OWASP_T_INHERIT[$_td]}"
+        local _t_ep_n=0 _t_su_n=0
+        [[ -n "${OWASP_T_ENDPOINTS[$_td]}" ]] && _t_ep_n=$(echo -n "${OWASP_T_ENDPOINTS[$_td]}" | grep -c '^')
+        [[ -n "${OWASP_T_SUITES[$_td]}" ]] && _t_su_n=$(echo "${OWASP_T_SUITES[$_td]}" | wc -w)
+        local _sw="${OWASP_T_SWAGGER_URL[$_td]:-inherit}"
+        echo -e "  ${CYAN}[OWASP]   ${BOLD}${_td}${NC}${CYAN}: enabled=${_te} inherit=${_ti} endpoints=${_t_ep_n} suites=${_t_su_n} swagger=${_sw}${NC}"
+    done
+}
+
+# ── Resolve effective setting for a target (target overrides > global) ──
+_owasp_setting() {
+    local target="${1,,}" key="$2"
+    case "$key" in
+        swagger_url)   local v="${OWASP_T_SWAGGER_URL[$target]:-}";  echo "${v:-$OWASP_G_SWAGGER_URL}" ;;
+        base_url)      local v="${OWASP_T_BASE_URL[$target]:-}";     echo "${v:-$OWASP_G_BASE_URL}" ;;
+        auth_header)   local v="${OWASP_T_AUTH_HEADER[$target]:-}";  echo "${v:-$OWASP_G_AUTH_HEADER}" ;;
+        extra_headers) local v="${OWASP_T_EXTRA_HEADERS[$target]:-}";echo "${v:-$OWASP_G_EXTRA_HEADERS}" ;;
+        timeout)       local v="${OWASP_T_TIMEOUT[$target]:-}";      echo "${v:-$OWASP_G_TIMEOUT}" ;;
+        verify_ssl)    local v="${OWASP_T_VERIFY_SSL[$target]:-}";   echo "${v:-$OWASP_G_VERIFY_SSL}" ;;
+        enabled)       echo "${OWASP_T_ENABLED[$target]:-true}" ;;
+        inherit)       echo "${OWASP_T_INHERIT[$target]:-true}" ;;
+        *) echo "" ;;
+    esac
+}
+
+# ── Check if OWASP endpoint testing is enabled for a target ──
+_owasp_is_enabled() {
+    local target="${1,,}"
+    $OWASP_CONF_LOADED || return 1
+    # If target has explicit block → respect ENABLED
+    if [[ -n "${OWASP_T_ENABLED[$target]+x}" ]]; then
+        [[ "${OWASP_T_ENABLED[$target]}" == "true" ]] && return 0 || return 1
+    fi
+    # No explicit block → enabled if there are any global endpoints/suites/swagger
+    [[ ${#OWASP_G_ENDPOINTS[@]} -gt 0 || ${#OWASP_G_SUITES[@]} -gt 0 || -n "$OWASP_G_SWAGGER_URL" ]] && return 0
+    return 1
+}
+
+# ── Collect merged endpoints array for a target ──
+# Sets caller arrays: _RESOLVED_ENDPOINTS, _RESOLVED_SUITES, _RESOLVED_SUITE_TESTS (assoc must exist)
+_owasp_resolve_target() {
+    local target="${1,,}"
+
+    # Effective settings (written to globals consumed by _owasp_curl_opts / _owasp_test_endpoint)
+    OWASP_AUTH_HEADER="$(_owasp_setting "$target" auth_header)"
+    OWASP_EXTRA_HEADERS="$(_owasp_setting "$target" extra_headers)"
+    OWASP_TIMEOUT="$(_owasp_setting "$target" timeout)"
+    OWASP_VERIFY_SSL="$(_owasp_setting "$target" verify_ssl)"
+    OWASP_SWAGGER_URL="$(_owasp_setting "$target" swagger_url)"
+    OWASP_BASE_URL="$(_owasp_setting "$target" base_url)"
+
+    # Build endpoints array
+    _RESOLVED_ENDPOINTS=()
+    _RESOLVED_SUITES=()
+
+    local do_inherit="$(_owasp_setting "$target" inherit)"
+
+    # Global endpoints (if inheriting)
+    if [[ "$do_inherit" == "true" ]]; then
+        _RESOLVED_ENDPOINTS=("${OWASP_G_ENDPOINTS[@]}")
+        _RESOLVED_SUITES=("${OWASP_G_SUITES[@]}")
+        for _gs in "${OWASP_G_SUITES[@]}"; do
+            _RESOLVED_SUITE_TESTS["$_gs"]="${OWASP_G_SUITE_TESTS[$_gs]:-}"
+        done
+    fi
+
+    # Target-specific endpoints
+    if [[ -n "${OWASP_T_ENDPOINTS[$target]:-}" ]]; then
+        while IFS= read -r _eline; do
+            [[ -z "$_eline" ]] && continue
+            _RESOLVED_ENDPOINTS+=("$_eline")
+        done <<< "${OWASP_T_ENDPOINTS[$target]}"
+    fi
+
+    # Target-specific suites
+    if [[ -n "${OWASP_T_SUITES[$target]:-}" ]]; then
+        for _ts in ${OWASP_T_SUITES[$target]}; do
+            _RESOLVED_SUITES+=("$_ts")
+            _RESOLVED_SUITE_TESTS["$_ts"]="${OWASP_T_SUITE_TESTS[${target}::${_ts}]:-}"
+        done
+    fi
+}
+
+# ── Parse Swagger/OpenAPI JSON or YAML → append to _RESOLVED_ENDPOINTS ──
+_parse_swagger() {
+    local base_url="$1"
+    [[ -z "$OWASP_SWAGGER_URL" ]] && return 0
+
+    local swagger_url="$OWASP_SWAGGER_URL"
+    # Resolve relative URL
+    if [[ "$swagger_url" != http* ]]; then
+        swagger_url="${base_url%/}/${swagger_url#/}"
+    fi
+
+    echo -e "  ${CYAN}[OWASP] Fetching Swagger/OpenAPI from: ${BOLD}${swagger_url}${NC}"
+
+    local curl_opts=(-sL --connect-timeout 8 --max-time 30 -A 'Mozilla/5.0')
+    [[ "$OWASP_VERIFY_SSL" != "true" ]] && curl_opts+=(-k)
+    [[ -n "$OWASP_AUTH_HEADER" ]] && curl_opts+=(-H "Authorization: $OWASP_AUTH_HEADER")
+
+    local swagger_raw
+    swagger_raw=$(timeout 30 curl "${curl_opts[@]}" "$swagger_url" 2>/dev/null)
+    if [[ -z "$swagger_raw" ]]; then
+        echo -e "  ${RED}[OWASP] Could not fetch Swagger spec from ${swagger_url}${NC}"
+        return 1
+    fi
+
+    # Detect if YAML and convert to JSON
+    local swagger_json="$swagger_raw"
+    if ! echo "$swagger_raw" | jq empty 2>/dev/null; then
+        if command -v python3 &>/dev/null; then
+            swagger_json=$(echo "$swagger_raw" | python3 -c '
+import sys, json
+try:
+    import yaml
+    data = yaml.safe_load(sys.stdin.read())
+    json.dump(data, sys.stdout)
+except Exception:
+    sys.exit(1)
+' 2>/dev/null)
+            if [[ $? -ne 0 || -z "$swagger_json" ]]; then
+                echo -e "  ${RED}[OWASP] Failed to parse Swagger spec (not valid JSON or YAML)${NC}"
+                return 1
+            fi
+        else
+            echo -e "  ${RED}[OWASP] Swagger spec is YAML but python3 not available for conversion${NC}"
+            return 1
+        fi
+    fi
+
+    if ! command -v jq &>/dev/null; then
+        echo -e "  ${RED}[OWASP] jq required for Swagger parsing — install with: apt install jq${NC}"
+        return 1
+    fi
+
+    # Extract base path (Swagger 2.0 vs OpenAPI 3.x)
+    local api_base_path=""
+    api_base_path=$(echo "$swagger_json" | jq -r '.basePath // ""' 2>/dev/null)
+    if [[ -z "$api_base_path" ]]; then
+        local server_url
+        server_url=$(echo "$swagger_json" | jq -r '.servers[0].url // ""' 2>/dev/null)
+        if [[ -n "$server_url" && "$server_url" != "null" ]]; then
+            if [[ "$server_url" == http* ]]; then
+                api_base_path=$(echo "$server_url" | sed 's|https\?://[^/]*||')
+            else
+                api_base_path="$server_url"
+            fi
+        fi
+    fi
+
+    # Extract endpoints
+    local swagger_endpoints
+    swagger_endpoints=$(echo "$swagger_json" | jq -r '
+        .paths // {} | to_entries[] |
+        .key as $path |
+        .value | to_entries[] |
+        select(.key | test("^(get|post|put|patch|delete|head|options)$")) |
+        {
+            method: (.key | ascii_upcase),
+            path: $path,
+            summary: (.value.summary // .value.operationId // ""),
+            consumes: ((.value.consumes // .value.requestBody.content // {}) | keys | first // ""),
+            parameters: ([(.value.parameters // [] | .[] | select(.required == true) | .name)] | join(","))
+        } |
+        "\(.method)|\(.path)|\(.consumes)|\(.parameters)|\(.summary)"
+    ' 2>/dev/null)
+
+    if [[ -z "$swagger_endpoints" ]]; then
+        echo -e "  ${YELLOW}[OWASP] No endpoints found in Swagger spec${NC}"
+        return 1
+    fi
+
+    local sw_count=0
+    while IFS= read -r ep_line; do
+        [[ -z "$ep_line" ]] && continue
+        local method path ctype params summary
+        IFS='|' read -r method path ctype params summary <<< "$ep_line"
+        path="${api_base_path%/}/${path#/}"
+        path=$(echo "$path" | sed 's|//|/|g')
+        path=$(echo "$path" | sed 's/{[^}]*}/1/g')
+        _RESOLVED_ENDPOINTS+=("${method}|${path}|${ctype}||2xx|swagger: ${summary:-$method $path}")
+        ((sw_count++))
+    done <<< "$swagger_endpoints"
+
+    echo -e "  ${GREEN}[OWASP] Parsed ${BOLD}${sw_count}${NC}${GREEN} endpoints from Swagger/OpenAPI spec${NC}"
+}
+
+# ── Build curl arguments from currently-active OWASP settings ──
+_owasp_curl_opts() {
+    local -a opts=(-sL --connect-timeout "$OWASP_TIMEOUT" --max-time "$((OWASP_TIMEOUT * 3))" -A 'Mozilla/5.0 (X11; Linux x86_64)')
+    [[ "$OWASP_VERIFY_SSL" != "true" ]] && opts+=(-k)
+    [[ -n "$OWASP_AUTH_HEADER" ]] && opts+=(-H "Authorization: $OWASP_AUTH_HEADER")
+    if [[ -n "$OWASP_EXTRA_HEADERS" ]]; then
+        local IFS='|'
+        for hdr in $OWASP_EXTRA_HEADERS; do
+            opts+=(-H "$hdr")
+        done
+    fi
+    echo "${opts[@]}"
+}
+
+# ── Test a single API endpoint and return TAB-separated results ──
+# Usage: _owasp_test_endpoint <base_url> <METHOD|PATH|CTYPE|BODY|EXPECT|DESC>
+_owasp_test_endpoint() {
+    local base_url="$1"
+    local spec="$2"
+    local method path ctype body expect_status desc
+    IFS='|' read -r method path ctype body expect_status desc <<< "$spec"
+
+    method="${method:-GET}"
+    path="${path:-/}"
+    desc="${desc:-$method $path}"
+
+    local full_url="${base_url%/}/${path#/}"
+    local curl_args
+    read -ra curl_args <<< "$(_owasp_curl_opts)"
+
+    curl_args+=(-X "$method")
+
+    if [[ -n "$ctype" ]]; then
+        curl_args+=(-H "Content-Type: $ctype")
+    elif [[ "$method" =~ ^(POST|PUT|PATCH)$ ]]; then
+        curl_args+=(-H "Content-Type: application/json")
+    fi
+
+    if [[ -n "$body" ]]; then
+        curl_args+=(-d "$body")
+    elif [[ "$method" =~ ^(POST|PUT|PATCH)$ ]]; then
+        curl_args+=(-d '{}')
+    fi
+
+    local resp_code resp_time
+    resp_code=$(timeout "$((OWASP_TIMEOUT * 3))" curl "${curl_args[@]}" -o /dev/null -w '%{http_code}|%{time_total}' "$full_url" 2>/dev/null)
+    resp_time="${resp_code#*|}"
+    resp_code="${resp_code%%|*}"
+
+    local resp_hdrs hdrs_low resp_body
+    resp_hdrs=$(timeout "$((OWASP_TIMEOUT * 2))" curl "${curl_args[@]}" -I "$full_url" 2>/dev/null)
+    hdrs_low=$(echo "$resp_hdrs" | tr '[:upper:]' '[:lower:]')
+    resp_body=$(timeout "$((OWASP_TIMEOUT * 2))" curl "${curl_args[@]}" "$full_url" 2>/dev/null | head -c 20000)
+
+    local ep_pass=0 ep_warn=0 ep_fail=0 ep_info=0 ep_findings=""
+
+    # Status code check
+    if [[ "$resp_code" == "000" ]]; then
+        ((ep_fail++)); ep_findings+="TIMEOUT "
+    elif [[ -n "$expect_status" && "$expect_status" != "" ]]; then
+        case "$expect_status" in
+            2xx) [[ "$resp_code" =~ ^2 ]] && ((ep_pass++)) || { ((ep_warn++)); ep_findings+="unexpected:${resp_code} "; } ;;
+            *)   [[ "$resp_code" == "$expect_status" ]] && ((ep_pass++)) || { ((ep_warn++)); ep_findings+="expected:${expect_status}→got:${resp_code} "; } ;;
+        esac
+    else
+        [[ "$resp_code" =~ ^[2345] ]] && ((ep_pass++))
+    fi
+
+    # Auth enforcement check
+    if [[ -z "$OWASP_AUTH_HEADER" && "$method" =~ ^(POST|PUT|PATCH|DELETE)$ ]]; then
+        if [[ "$resp_code" =~ ^(200|201|204)$ ]]; then
+            ((ep_fail++)); ep_findings+="NO_AUTH_REQUIRED "
+        elif [[ "$resp_code" =~ ^(401|403)$ ]]; then
+            ((ep_pass++)); ep_findings+="auth_enforced "
+        fi
+    fi
+
+    # Security headers
+    echo "$hdrs_low" | grep -q 'x-content-type-options.*nosniff' || { ((ep_warn++)); ep_findings+="no_nosniff "; }
+    echo "$hdrs_low" | grep -q 'access-control-allow-origin.*\*' && { ((ep_fail++)); ep_findings+="cors_wildcard "; }
+    echo "$hdrs_low" | grep -qP 'server:.*[0-9]+\.[0-9]+' && { ((ep_warn++)); ep_findings+="server_version_leak "; }
+
+    # Error disclosure
+    echo "$resp_body" | grep -qiP 'stack.?trace|traceback|exception.*line|sql.*syntax|ORA-[0-9]|/home/|/var/www|debug' && { ((ep_fail++)); ep_findings+="ERROR_DISCLOSURE "; }
+
+    # Sensitive data in response
+    echo "$resp_body" | grep -qiP '"(password|secret|api.?key|token|private.?key|access.?key)"' && { ((ep_fail++)); ep_findings+="SENSITIVE_DATA_LEAK "; }
+
+    # Rate limiting
+    if [[ "$method" =~ ^(POST|PUT|PATCH|DELETE)$ ]]; then
+        echo "$hdrs_low" | grep -qP 'x-ratelimit|ratelimit-|retry-after' || { ((ep_warn++)); ep_findings+="no_rate_limit "; }
+    fi
+
+    # Response time
+    local time_ms
+    time_ms=$(echo "$resp_time" | awk '{printf "%d", $1 * 1000}' 2>/dev/null)
+    [[ -n "$time_ms" && "$time_ms" -gt 5000 ]] && { ((ep_warn++)); ep_findings+="slow:${time_ms}ms "; }
+
+    local verdict="PASS"
+    [[ $ep_fail -gt 0 ]] && verdict="FAIL"
+    [[ $ep_fail -eq 0 && $ep_warn -gt 0 ]] && verdict="WARN"
+
+    echo -e "${method}\t${path}\t${resp_code}\t${verdict}\t${ep_pass}\t${ep_warn}\t${ep_fail}\t${ep_info}\t${resp_time}\t${ep_findings}\t${desc}"
+}
+
+# ── Run endpoint tests for a resolved target — shared by OWASP & AI pentests ──
+# Usage: _owasp_run_endpoint_tests <base_url> <label>
+# Reads: _RESOLVED_ENDPOINTS[], _RESOLVED_SUITES[], _RESOLVED_SUITE_TESTS[]
+# Writes: OWASP_LAST_PASS, OWASP_LAST_WARN, OWASP_LAST_FAIL, OWASP_LAST_COLLECT (for AI context)
+_owasp_run_endpoint_tests() {
+    local base_url="$1" label="${2:-owasp.conf}"
+
+    OWASP_LAST_PASS=0; OWASP_LAST_WARN=0; OWASP_LAST_FAIL=0; OWASP_LAST_COLLECT=""
+
+    # Merge suite endpoints into main array
+    for _sn in "${_RESOLVED_SUITES[@]}"; do
+        while IFS= read -r _sline; do
+            [[ -z "$_sline" ]] && continue
+            _RESOLVED_ENDPOINTS+=("$_sline")
+        done <<< "${_RESOLVED_SUITE_TESTS[$_sn]:-}"
+    done
+
+    local _ep_total=${#_RESOLVED_ENDPOINTS[@]}
+    [[ $_ep_total -eq 0 ]] && return 0
+
+    subsection "API / Endpoint Security Testing — ${label} (${_ep_total} endpoints)"
+    echo -e "  ${CYAN}Base URL: ${BOLD}${base_url}${NC}"
+    [[ -n "$OWASP_AUTH_HEADER" ]] && echo -e "  ${CYAN}Auth: ${BOLD}${OWASP_AUTH_HEADER:0:20}...${NC}"
+    echo ""
+
+    echo -e "  ${BOLD}$(pad 'METHOD' 8) $(pad 'PATH' 38) $(pad 'CODE' 6) $(pad 'RESULT' 6) $(pad 'TIME' 8) FINDINGS${NC}"
+    sep "-" 90
+
+    local -a _ep_results=()
+    local _ep_idx=0
+
+    for _ep_spec in "${_RESOLVED_ENDPOINTS[@]}"; do
+        ((_ep_idx++))
+        [[ $_ep_total -gt 10 && $((_ep_idx % 10)) -eq 0 ]] && echo -e "  ${DIM}... testing endpoint ${_ep_idx}/${_ep_total}${NC}" >&2
+
+        local _ep_result
+        _ep_result=$(_owasp_test_endpoint "$base_url" "$_ep_spec")
+
+        local _ep_method _ep_path _ep_code _ep_verdict _ep_p _ep_w _ep_f _ep_i _ep_time _ep_findings _ep_desc
+        IFS=$'\t' read -r _ep_method _ep_path _ep_code _ep_verdict _ep_p _ep_w _ep_f _ep_i _ep_time _ep_findings _ep_desc <<< "$_ep_result"
+
+        OWASP_LAST_PASS=$((OWASP_LAST_PASS + _ep_p))
+        OWASP_LAST_WARN=$((OWASP_LAST_WARN + _ep_w))
+        OWASP_LAST_FAIL=$((OWASP_LAST_FAIL + _ep_f))
+
+        local _vcolor="${GREEN}"
+        case "$_ep_verdict" in
+            FAIL) _vcolor="${RED}" ;;
+            WARN) _vcolor="${YELLOW}" ;;
+        esac
+
+        local _disp_path="$_ep_path"
+        [[ ${#_disp_path} -gt 37 ]] && _disp_path="${_disp_path:0:34}..."
+        local _disp_time="${_ep_time:-?}s"
+
+        local _disp_findings=""
+        [[ "$_ep_findings" == *"NO_AUTH"* ]] && _disp_findings+="${RED}NO_AUTH${NC} "
+        [[ "$_ep_findings" == *"SENSITIVE_DATA"* ]] && _disp_findings+="${RED}DATA_LEAK${NC} "
+        [[ "$_ep_findings" == *"ERROR_DISCLOSURE"* ]] && _disp_findings+="${RED}ERR_LEAK${NC} "
+        [[ "$_ep_findings" == *"cors_wildcard"* ]] && _disp_findings+="${YELLOW}CORS*${NC} "
+        [[ "$_ep_findings" == *"no_nosniff"* ]] && _disp_findings+="${DIM}nosniff${NC} "
+        [[ "$_ep_findings" == *"no_rate_limit"* ]] && _disp_findings+="${DIM}ratelimit${NC} "
+        [[ "$_ep_findings" == *"server_version"* ]] && _disp_findings+="${DIM}srvver${NC} "
+        [[ "$_ep_findings" == *"slow:"* ]] && _disp_findings+="${YELLOW}SLOW${NC} "
+        [[ "$_ep_findings" == *"auth_enforced"* ]] && _disp_findings+="${GREEN}auth✓${NC} "
+        [[ "$_ep_findings" == *"TIMEOUT"* ]] && _disp_findings+="${RED}TIMEOUT${NC} "
+        [[ -z "$_disp_findings" && "$_ep_verdict" == "PASS" ]] && _disp_findings="${DIM}clean${NC}"
+
+        echo -e "  $(pad "$_ep_method" 8) $(pad "$_disp_path" 38) $(pad "$_ep_code" 6) ${_vcolor}$(pad "$_ep_verdict" 6)${NC} $(pad "$_disp_time" 8) ${_disp_findings}"
+
+        _ep_results+=("${_ep_result}")
+        OWASP_LAST_COLLECT+="${label} Endpoint: ${_ep_method} ${_ep_path} Status:${_ep_code} Verdict:${_ep_verdict} Findings:${_ep_findings} Desc:${_ep_desc}\n"
+    done
+
+    sep "-" 90
+
+    # Summary
+    echo ""
+    subsection "API Endpoint Assessment Summary"
+    echo -e "  ${BOLD}Endpoints tested:${NC}  $_ep_total"
+    echo -e "  ${GREEN}Pass checks:${NC}       $OWASP_LAST_PASS"
+    echo -e "  ${YELLOW}Warnings:${NC}          $OWASP_LAST_WARN"
+    echo -e "  ${RED}Failures:${NC}          $OWASP_LAST_FAIL"
+    echo ""
+
+    # Per-endpoint advisory
+    local _has_advisory=false
+    for _epr in "${_ep_results[@]}"; do
+        local _a_method _a_path _a_code _a_verdict _a_p _a_w _a_f _a_i _a_time _a_findings _a_desc
+        IFS=$'\t' read -r _a_method _a_path _a_code _a_verdict _a_p _a_w _a_f _a_i _a_time _a_findings _a_desc <<< "$_epr"
+
+        if [[ "$_a_verdict" == "FAIL" || "$_a_verdict" == "WARN" ]]; then
+            if ! $_has_advisory; then
+                subsection "Per-Endpoint Advisory"
+                _has_advisory=true
+            fi
+            local _sev_col="${YELLOW}"
+            [[ "$_a_verdict" == "FAIL" ]] && _sev_col="${RED}"
+            echo -e "  ${_sev_col}${BOLD}[${_a_verdict}]${NC} ${BOLD}${_a_method} ${_a_path}${NC} ${DIM}(${_a_desc})${NC}"
+            echo -e "        Status: ${_a_code}  |  Time: ${_a_time}s"
+
+            for _finding in $_a_findings; do
+                case "$_finding" in
+                    NO_AUTH_REQUIRED)
+                        echo -e "        ${RED}→${NC} ${_a_method} endpoint accepts unauthenticated requests"
+                        echo -e "          ${CYAN}Fix:${NC} Add authentication middleware (JWT, OAuth2, API key)" ;;
+                    SENSITIVE_DATA_LEAK)
+                        echo -e "        ${RED}→${NC} Response contains sensitive fields (password, secret, api_key)"
+                        echo -e "          ${CYAN}Fix:${NC} Sanitize API responses; use DTOs to exclude sensitive fields" ;;
+                    ERROR_DISCLOSURE)
+                        echo -e "        ${RED}→${NC} Error response exposes stack traces or internal paths"
+                        echo -e "          ${CYAN}Fix:${NC} Use generic error handlers; disable debug mode in production" ;;
+                    cors_wildcard)
+                        echo -e "        ${YELLOW}→${NC} CORS allows any origin (*)"
+                        echo -e "          ${CYAN}Fix:${NC} Restrict Access-Control-Allow-Origin to trusted domains" ;;
+                    no_nosniff)
+                        echo -e "        ${YELLOW}→${NC} Missing X-Content-Type-Options: nosniff"
+                        echo -e "          ${CYAN}Fix:${NC} Add header to prevent MIME-type sniffing attacks" ;;
+                    no_rate_limit)
+                        echo -e "        ${YELLOW}→${NC} No rate-limiting headers on mutating endpoint"
+                        echo -e "          ${CYAN}Fix:${NC} Implement rate limiting (X-RateLimit-Limit/Remaining/Reset)" ;;
+                    server_version_leak)
+                        echo -e "        ${YELLOW}→${NC} Server header leaks software version"
+                        echo -e "          ${CYAN}Fix:${NC} Hide version in server config (server_tokens off)" ;;
+                    slow:*)
+                        local _ms="${_finding#slow:}"
+                        echo -e "        ${YELLOW}→${NC} Slow response: ${_ms} (>5000ms may indicate DoS surface)"
+                        echo -e "          ${CYAN}Fix:${NC} Optimize endpoint; add caching or request timeouts" ;;
+                    TIMEOUT)
+                        echo -e "        ${RED}→${NC} Request timed out"
+                        echo -e "          ${CYAN}Fix:${NC} Check endpoint availability and server health" ;;
+                esac
+            done
+            echo ""
+        fi
+    done
+
+    # Per-suite results
+    if [[ ${#_RESOLVED_SUITES[@]} -gt 0 ]]; then
+        subsection "Test Suite Results"
+        for _sn in "${_RESOLVED_SUITES[@]}"; do
+            echo -e "  ${BOLD}Suite: ${CYAN}${_sn}${NC}"
+            local _suite_p=0 _suite_w=0 _suite_f=0
+            while IFS= read -r _sline; do
+                [[ -z "$_sline" ]] && continue
+                local _sr
+                _sr=$(_owasp_test_endpoint "$base_url" "$_sline")
+                local _sm _sp _sc _sv _svp _svw _svf
+                IFS=$'\t' read -r _sm _sp _sc _sv _svp _svw _svf _ _ _ _ <<< "$_sr"
+                _suite_p=$((_suite_p + _svp)); _suite_w=$((_suite_w + _svw)); _suite_f=$((_suite_f + _svf))
+            done <<< "${_RESOLVED_SUITE_TESTS[$_sn]:-}"
+            local _suite_tot=$((_suite_p + _suite_w + _suite_f))
+            local _suite_score=0
+            [[ $_suite_tot -gt 0 ]] && _suite_score=$(( _suite_p * 100 / _suite_tot ))
+            local _suite_grade="F"
+            [[ $_suite_score -ge 90 ]] && _suite_grade="A+"
+            [[ $_suite_score -ge 80 && $_suite_score -lt 90 ]] && _suite_grade="A"
+            [[ $_suite_score -ge 70 && $_suite_score -lt 80 ]] && _suite_grade="B"
+            [[ $_suite_score -ge 60 && $_suite_score -lt 70 ]] && _suite_grade="C"
+            [[ $_suite_score -ge 45 && $_suite_score -lt 60 ]] && _suite_grade="D"
+            echo -e "    Pass: ${GREEN}${_suite_p}${NC}  Warn: ${YELLOW}${_suite_w}${NC}  Fail: ${RED}${_suite_f}${NC}  Score: ${BOLD}${_suite_score}%${NC}  Grade: ${BOLD}${_suite_grade}${NC}"
+            echo ""
+        done
+    fi
 }
 
 # ====================== USAGE ======================
@@ -1463,6 +2094,37 @@ run_owasp_pentest() {
         fi
     else
         owasp_fail "${RED}No DMARC record${NC} (email spoofing unprotected)"
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # OWASP.CONF — MULTI-TARGET API ENDPOINT & PATH TESTING
+    # ═══════════════════════════════════════════════════════════════
+    _load_owasp_conf
+    if $OWASP_CONF_LOADED && _owasp_is_enabled "$T"; then
+        # Resolve target-specific (or global) config
+        local -a _RESOLVED_ENDPOINTS=()
+        local -a _RESOLVED_SUITES=()
+        local -A _RESOLVED_SUITE_TESTS=()
+        _owasp_resolve_target "$T"
+
+        local _owasp_base="${OWASP_BASE_URL:-$URL}"
+
+        # Parse Swagger if configured for this target
+        [[ -n "$OWASP_SWAGGER_URL" ]] && _parse_swagger "$_owasp_base"
+
+        local _ep_total=${#_RESOLVED_ENDPOINTS[@]}
+        if [[ $_ep_total -gt 0 ]]; then
+            # Use the shared runner — it prints table, summary, advisory, suites
+            _owasp_run_endpoint_tests "$_owasp_base" "$T"
+
+            # Feed per-endpoint pass/warn/fail into OWASP scorecard
+            pass=$((pass + OWASP_LAST_PASS))
+            warn=$((warn + OWASP_LAST_WARN))
+            fail=$((fail + OWASP_LAST_FAIL))
+            total=$((total + OWASP_LAST_PASS + OWASP_LAST_WARN + OWASP_LAST_FAIL))
+        fi
+    elif $OWASP_CONF_LOADED && ! _owasp_is_enabled "$T"; then
+        echo -e "\n  ${DIM}[OWASP] Endpoint testing disabled for ${T} in owasp.conf${NC}"
     fi
 
     # ═══════════════════════════════════════════════════════════════
@@ -3096,6 +3758,40 @@ run_ai_pentest() {
         [[ "$api_found" -gt 0 && "$api_sensitive" -eq 0 && "$api_unauth" -eq 0 ]] && ai_pass_msg "All $api_found APIs properly protected"
     fi
 
+    # ── owasp.conf Multi-Target Integration for AI Pentest ──────────────
+    _load_owasp_conf 2>/dev/null
+    if $OWASP_CONF_LOADED && _owasp_is_enabled "$T"; then
+        local -a _RESOLVED_ENDPOINTS=()
+        local -a _RESOLVED_SUITES=()
+        local -A _RESOLVED_SUITE_TESTS=()
+        _owasp_resolve_target "$T"
+
+        local _ai_owasp_base="${OWASP_BASE_URL:-$URL}"
+        [[ -n "$OWASP_SWAGGER_URL" ]] && _parse_swagger "$_ai_owasp_base" 2>/dev/null
+
+        local _ai_ep_total=${#_RESOLVED_ENDPOINTS[@]}
+        if [[ $_ai_ep_total -gt 0 ]]; then
+            echo ""
+            _owasp_run_endpoint_tests "$_ai_owasp_base" "${T} (AI)"
+
+            # Feed results into AI context
+            api_collect+="${OWASP_LAST_COLLECT}"
+            ai_pass=$((ai_pass + OWASP_LAST_PASS))
+            ai_warn=$((ai_warn + OWASP_LAST_WARN))
+            ai_fail=$((ai_fail + OWASP_LAST_FAIL))
+
+            # Track in found_apis
+            for _ep_spec in "${_RESOLVED_ENDPOINTS[@]}"; do
+                local _ep_path
+                _ep_path=$(echo "$_ep_spec" | cut -d'|' -f2)
+                found_apis+=("$_ep_path")
+                ((api_found++))
+            done
+        fi
+    elif $OWASP_CONF_LOADED && ! _owasp_is_enabled "$T"; then
+        echo -e "\n  ${DIM}[OWASP] Endpoint testing disabled for ${T} in owasp.conf${NC}"
+    fi
+
     # API Security Headers
     subsection "API Security Headers"
     local api_rate_limit=false api_cors_open=false api_content_type=false
@@ -3563,7 +4259,12 @@ run_ai_pentest() {
         ai_context+="API stats: ${api_found} found, ${api_unauth} unauthenticated, ${api_sensitive} sensitive exposed\n"
         ai_context+="Upload endpoints: ${upload_endpoints} found, upload forms: ${upload_forms}\n"
         ai_context+="Crypto issues: ${crypto_issues}\n"
-        ai_context+="Misconfig exposed: ${misconfig_count}\n\n"
+        ai_context+="Misconfig exposed: ${misconfig_count}\n"
+        if $OWASP_CONF_LOADED && _owasp_is_enabled "$T"; then
+            ai_context+="owasp.conf loaded for ${T}: ${#_RESOLVED_ENDPOINTS[@]:-0} custom endpoints tested\n"
+            [[ -n "${OWASP_SWAGGER_URL:-}" ]] && ai_context+="Swagger/OpenAPI source: ${OWASP_SWAGGER_URL}\n"
+        fi
+        ai_context+="\n"
 
         ai_context+="Provide a concise security assessment in this format:\n"
         ai_context+="1. RISK SUMMARY (1-2 sentences)\n"

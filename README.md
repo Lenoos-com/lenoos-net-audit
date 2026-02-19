@@ -1,6 +1,6 @@
 # Lenoos Net Audit
 
-> **v1.0.2** — Swiss Army Knife for Network Security & Diagnostics. A comprehensive, all-in-one Bash toolkit for network forensics, security auditing, censorship detection, vulnerability assessment, AI-powered pentesting, and performance stress testing.
+> **v1.0.3** — Swiss Army Knife for Network Security & Diagnostics. A comprehensive, all-in-one Bash toolkit for network forensics, security auditing, censorship detection, vulnerability assessment, AI-powered pentesting, and performance stress testing.
 
 ---
 
@@ -519,6 +519,108 @@ Customize PDF report appearance by creating a `pdf.conf` file. The script search
 
 A sample `pdf.conf` is included in the repository.
 
+### OWASP Testing (`owasp.conf`)
+
+Define API endpoints, paths, and test suites for OWASP security testing. Supports **multi-target** configurations — test your website, web app, and API backend in a single audit with per-target settings. Used by both native (`-O`) and AI-based (`-M`) pentest modules.
+
+The script searches these locations (in order):
+
+1. `./owasp.conf` (current working directory)
+2. `<script_dir>/owasp.conf` (same folder as `lenoos-net-audit.sh`)
+3. `~/.config/lenoos/owasp.conf`
+
+**File structure:**
+
+```
+# Global settings, paths, endpoints, suites (apply to all targets)
+SWAGGER_URL = ...
+/health
+GET|/api/status|-|-|200|Status check
+[suite:CommonSecurity] ... [/suite]
+
+# Per-target blocks (override globals)
+[target:app.example.com]
+  AUTH_HEADER = Bearer xxx
+  GET|/api/v1/users|-|-|200|List users
+  [suite:AppAuth] ... [/suite]
+[/target]
+
+[target:staging.example.com]
+  ENABLED = false
+[/target]
+```
+
+**Global settings:**
+
+| Key | Description |
+|---|---|
+| `SWAGGER_URL` | Swagger / OpenAPI spec URL — auto-discovers all endpoints and methods |
+| `BASE_URL` | Base URL prefix for relative paths (optional, defaults to target) |
+| `AUTH_HEADER` | Authorization header, e.g. `Bearer <token>` |
+| `EXTRA_HEADERS` | Additional headers, pipe-separated |
+| `TIMEOUT` | Per-request timeout in seconds (default: `10`) |
+| `VERIFY_SSL` | `true` / `false` — verify TLS certificates (default: `true`) |
+
+**Per-target settings** (inside `[target:domain]...[/target]`):
+
+| Key | Description |
+|---|---|
+| `ENABLED` | `true` / `false` — enable or disable OWASP for this target (default: `true`) |
+| `INHERIT_GLOBAL` | `true` / `false` — inherit global endpoints and suites (default: `true`) |
+| All global keys | Override any global setting per target (`SWAGGER_URL`, `AUTH_HEADER`, etc.) |
+
+**Entry formats:**
+
+| Format | Example | Description |
+|---|---|---|
+| Simple path / glob | `/api/v1/*` | Probed with GET; glob expands conceptually |
+| Endpoint spec | `GET\|/api/v1/users\|-\|-\|200\|List users` | `METHOD\|PATH\|CONTENT_TYPE\|BODY\|EXPECT_STATUS\|DESC` |
+| Test suite block | `[suite:Auth] ... [/suite]` | Groups endpoints for per-suite scoring |
+| Target block | `[target:domain] ... [/target]` | Per-target overrides and endpoints |
+
+**Multi-target example:**
+
+```bash
+# Audit website + web app + API in one command:
+sudo ./lenoos-net-audit.sh -O www.example.com app.example.com api.example.com
+
+# owasp.conf controls what to test on each target:
+#   www.example.com  → inherits global security checks only
+#   app.example.com  → custom auth endpoints + app-specific suites
+#   api.example.com  → Swagger auto-discovery + CRUD suites
+#   staging.example.com → ENABLED=false (skipped entirely)
+```
+
+**Endpoint spec fields:** `METHOD|PATH|CONTENT_TYPE|BODY|EXPECT_STATUS|DESCRIPTION`
+
+- `METHOD` — `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, `HEAD`
+- `PATH` — URL path; `{param}` placeholders are replaced with `1`
+- `CONTENT_TYPE` — e.g. `application/json` (use `-` for default)
+- `BODY` — Request body or `-` for none
+- `EXPECT_STATUS` — Expected HTTP status code or `-` for any
+- `DESCRIPTION` — Free-text label for reports
+
+**Per-endpoint checks performed:**
+
+- Status code validation against expected
+- Authentication enforcement (unauthenticated mutating methods → 401/403)
+- Security headers (`nosniff`, CORS wildcard, server version leak)
+- Error disclosure (stack traces, SQL errors, internal paths)
+- Sensitive data leak (password, secret, api_key in response body)
+- Rate limiting headers for mutating methods
+- Response time analysis (>5000 ms → warning)
+
+**Swagger / OpenAPI integration:**
+
+Set `SWAGGER_URL` (globally or per-target) to a Swagger 2.0 or OpenAPI 3.x spec URL. The parser automatically:
+
+- Detects JSON vs YAML format
+- Extracts base path from `basePath` (v2) or `servers[0].url` (v3)
+- Discovers all endpoints with methods, content types, and descriptions
+- Substitutes path parameters (`{id}` → `1`)
+
+A sample `owasp.conf` is included in the repository.
+
 ### 15. Streaming Output
 
 Stream structured output in real-time as each module completes — ideal for piping into other tools, logging systems, or CI/CD pipelines.
@@ -783,7 +885,7 @@ docker run -d --name lenoos-prom -p 9101:9101 \
 ```
 lenoos-net-audit.sh (single file, ~7770+ lines)
 │
-├── Configuration          (pdf.conf branding, exports/ directory)
+├── Configuration          (pdf.conf branding, owasp.conf endpoints, exports/ directory)
 ├── Identity & Setup       (-i, -j)
 ├── DNS Module             (-d, -D)
 ├── Routing Module         (-r, -g)
@@ -839,7 +941,7 @@ lenoos-net-audit.sh (single file, ~7770+ lines)
 
 See [CHANGES.md](CHANGES.md) for a detailed changelog following [Semantic Versioning](https://semver.org/).
 
-**Current version:** v1.0.2
+**Current version:** v1.0.3
 
 ---
 
